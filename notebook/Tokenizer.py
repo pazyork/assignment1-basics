@@ -13,10 +13,26 @@ class Tokenizer():
     def __init__(self, vocab:dict[int,bytes]={}, merges:list[tuple[bytes,bytes]]={}, special_tokens:list[str]=None):
         self.vocab=vocab
         self.merges=merges
-        self.special_tokens=special_tokens
+        if special_tokens:
+            self.special_tokens=special_tokens
+        else:
+            self.special_tokens=[]
+        self.vocab=self.__set_special_token_vocab__()
         self.merges_rank_dict=self.__set_merges_rank__()
         self.reverse_vocab=self.__set_reverse_vocab__()
-            
+    
+    def __set_special_token_vocab__(self):
+        if self.special_tokens:
+            special_token_dict={}
+            raw_vocab_size=len(self.vocab)
+            for st in self.special_tokens:
+                    st_bytes=st.encode('utf-8')
+                    if st_bytes not in self.vocab.values():
+                        special_token_dict[len(special_token_dict)+raw_vocab_size]=st_bytes
+            for (vocab_id,vocab_bytes) in special_token_dict:
+                self.vocab[vocab_id]=vocab_bytes
+        return self.vocab
+    
     def __set_merges_rank__(self):
         merges_rank_dict={}
         merges_len=len(self.merges)
@@ -26,7 +42,16 @@ class Tokenizer():
     
     def __set_reverse_vocab__(self):
         return dict(zip(self.vocab.values(),self.vocab.keys()))
-            
+    
+    def flatten_to_bytes(self,items:Iterable):
+        res=[]
+        for item in items:
+            if isinstance(item,Iterable):
+                res.extend(item)
+            else:
+                res.append(item)
+        return bytes(res)
+    
     @classmethod
     def get_bytes_map(cls)->(dict[int,str],dict[str,int]):
         bs=list(range(ord('!'),ord('~')+1))+list(range(ord('¡'),ord('¬')+1))+list(range(ord("®"), ord("ÿ")+1))
@@ -40,47 +65,95 @@ class Tokenizer():
         cs=[chr(c) for c in cs]
         byte_2_chr=dict(zip(bs,cs))
         chr_2_byte=dict(zip(cs,bs))
-        return byte_2_chr,chr_2_byte
-                
+        return byte_2_chr,chr_2_byte          
     
     @classmethod
     def from_files(cls, vocab_filepath:str, merges_filepath:str, special_tokens:list[str]=None):
         new_vocab={}
         new_merges=[]
+        byte_2_chr,chr_2_byte=cls.get_bytes_map()
         with open(vocab_filepath,"r",encoding='utf-8') as vocab_file:
             vocab_str=vocab_file.read()
             vocab_load=json.loads(vocab_str)
-            new_vocab=copy.deepcopy(vocab_load)
+            new_vocab={}
+            for item in vocab_load.items():
+                token_byte_chrs=item[0]
+                token_id=item[1]
+                token_bytes=bytes([chr_2_byte[byte_chr] for byte_chr in token_byte_chrs])
+                new_vocab[token_id]=token_bytes
             for st in special_tokens:
-                if st not in vocab_load.keys():
-                    new_vocab[st]=len(new_vocab)
+                st_bytes=st.encode('utf-8')
+                if st_bytes not in vocab_load.keys():
+                    new_vocab[len(new_vocab)]=st_bytes
         with open(merges_filepath,"r",encoding='utf-8') as merges_file:
             new_merges=[
                 tuple([
-                    line_str.strip().split(' ')[0],
-                    line_str.strip().split(' ')[1]
+                    bytes([chr_2_byte[byte_chr] for byte_chr in line_str.strip().split(' ')[0]]),
+                   bytes([chr_2_byte[byte_chr] for byte_chr in line_str.strip().split(' ')[1]])
             ]) for line_str in merges_file.readlines()]
         return Tokenizer(new_vocab,new_merges,special_tokens)
     
-    def split_by_special_tokens(cls, raw_str:str, special_tokens:list[str]):
-        split_pat=r"("+"|".join(map(re.escape,special_tokens))+r")"
-        parts = re.split(split_pat,raw_str)
-        result = [re.findall(cls.PAT,part)  for part in parts if (part!='' and part not in special_tokens)]
+    @classmethod
+    def pre_tokenizer(cls, raw_str:str, special_tokens:list[str]):
+        """将一段完整文本拆分为 (特殊token切分)+(常见拆词方法)的两级嵌套list结构:[[]]
+        """
+        parts=[]
+        if special_tokens:        
+            special_tokens_sorted=sorted(set(special_tokens),key=len,reverse=True)
+            split_pat=r"("+"|".join(map(re.escape,special_tokens_sorted))+r")"
+            parts = re.split(split_pat,raw_str)
+        else:
+            parts = [raw_str]
+        result=[]
+        for part in parts:
+            if part!='' and part not in special_tokens:
+                result.append(re.findall(cls.PAT,part))
+            elif part!='' and part in special_tokens:
+                result.append([part])
         return result
     
-    def flatten_to_bytes(self,items:Iterable):
-        res=[]
-        for item in items:
-            if isinstance(item,Iterable):
-                res.extend(item)
-            else:
-                res.append(item)
-        return bytes(res)
+    @classmethod
+    def __init_train_vocab__(cls,special_tokens:list[str]):
+        # 安全的byte取值范围
+        safe_bytes=list(range(ord('!'),ord('~')+1))+list(range(ord('¡'),ord('¬')+1))+list(range(ord("®"), ord("ÿ")+1))
+        base_bytes=safe_bytes[:]
+        diff=0
+        for idx in range(2**8):
+            if idx not in safe_bytes:
+                base_bytes.append(2**8+diff)
+                diff+=1
+        vocab={}
+        for i in len(base_bytes):
+            vocab[chr(base_bytes[i])]=i
+        
+        return vocab
+            
+    @classmethod
+    def __init_train_variables__(cls,raw_str:str,special_tokens:list[str]):
+        # 构建vocab
+        vocab={i:chr(i) for i in range(256)}
+        vocab.update({item[0]:item[1].encode('utf-8') for item in zip(range(256,256+len(special_tokens)),special_tokens)})
+        # 替换掉special_tokens，并进行分词
+        if special_tokens:
+            chunks=re.split("|".join(map(re.escape,special_tokens)),raw_str)
+        else:
+            chunks=[raw_str]
+        word_arr:list[str]=[item for chunk in chunks for item in re.findall(cls.PAT, chunk)]
+        # 统计分词后词频
+        word_bytes_freq = Counter([
+            tuple(bytes([b]) for b in x.encode('utf-8'))
+            for x in word_arr
+        ])
+        # 统计初始状态邻接词频
+        pair_freq=Counter()
+        for word_bytes in word_bytes_freq.keys():
+            pair_freq.update(zip(word_bytes,word_bytes[1:]))
+        return vocab,word_bytes_freq,pair_freq
     
     def pre_token_encode(self, text:str)->list[int]:
-        byte_2_chr,chr_2_byte=Tokenizer.get_bytes_map()
+        # print("DEBUG-pre_token_encode-text",text)
         ## init
-        word_bytes=tuple([byte_2_chr[x] for x in text.encode('utf-8')])
+        word_bytes=tuple([bytes([x]) for x in text.encode('utf-8')])
         ## 循环，找到最大的
         while True:
             # 统计当前pair对中，优先级最高的
@@ -106,46 +179,216 @@ class Tokenizer():
                 i+=1
             word_bytes=new_word_bytes
         ## 合并结束后，逐token翻译
-        result=[self.vocab.get(item) for item in word_bytes]
+        result=[self.reverse_vocab.get(item) for item in word_bytes]
         return result
-        
     
     def encode(self, text: str) -> list[int]:
         result=[]
-        parts=self.split_by_special_tokens(text,self.special_tokens)
+        if not text:
+            return result
+        parts=self.pre_tokenizer(text,self.special_tokens)
+        # print("DEBUG-encode-parts",parts)
         for part in parts:
             for chunk in part:
-                if chunk in self.vocab.keys():
-                    result.append(self.vocab.get(chunk))
+                # print("DEBUG-encode-chunk",chunk)
+                chunk_bytes=chunk.encode('utf-8')
+                # print("DEBUG-encode-chunk_bytes",chunk_bytes)
+                # print("DEBUG-encode-self.vocab.keys()",[key for key in self.vocab.keys()][:200])
+                if chunk_bytes in self.reverse_vocab.keys():
+                    result.append(self.reverse_vocab.get(chunk_bytes))
                 else:
                     vocab_ids=self.pre_token_encode(chunk)
                     result.extend(vocab_ids)
+        # print("DEBUG-encode-result",result)
         return result
     
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
-        pass
-    
+        for text in iterable:
+            token_ids=self.encode(text)
+            for token_id in token_ids:
+                yield token_id
+        return
+                
     def decode(self, ids: list[int]) -> str:
         ## encode: text(拆解)->byte->map_chr(聚合)->vocab_id
         ## decode: vocab_id->map_chr->byte(聚合)->text
-        byte_2_chr,chr_2_byte=Tokenizer.get_bytes_map()
-        vocab_chrs_list=[self.reverse_vocab.get(id) for id in ids]
-        byte_list=[]
-        for vocab_chrs in vocab_chrs_list:
-            for vocab_chr in vocab_chrs:
-                byte_list.append(chr_2_byte[vocab_chr])
-        return bytes(byte_list).decode('utf-8',errors="replace")
-    
-vocab_filepath="/root/CS336/assignment1-basics/tests/fixtures/gpt2_vocab.json"
-merges_filepath="/root/CS336/assignment1-basics/tests/fixtures/gpt2_merges.txt"
-t=Tokenizer.from_files(vocab_filepath,merges_filepath,["<|endoftext|>"])
-origin_text="I come from china，你呢"
-encode_ids=t.encode(origin_text)
-decode_str=t.decode(encode_ids)
+        vocab_bytes_list=[self.vocab.get(id) for id in ids]
+        bytes_buffer=b''
+        for vocab_bytes in vocab_bytes_list:
+            bytes_buffer+=vocab_bytes
+        return bytes_buffer.decode('utf-8',errors="replace")
 
-print(origin_text)
-print(encode_ids)
-print(decode_str)
+
+# vocab_filepath="/root/CS336/assignment1-basics/tests/fixtures/gpt2_vocab.json"
+# merges_filepath="/root/CS336/assignment1-basics/tests/fixtures/gpt2_merges.txt"
+# address_filepath="/root/CS336/assignment1-basics/tests/fixtures/address.txt"
+# address_raw_str=""
+# with open(address_filepath) as f:
+#     address_raw_str=f.read()
+
+# special_tokens=["<|endoftext|>"]
+# special_tokens=["<|endoftext|>", "<|endoftext|><|endoftext|>"]
+# special_tokens=[]
+# t=Tokenizer.from_files(vocab_filepath,merges_filepath,special_tokens)
+
+# with open("/root/CS336/assignment1-basics/tests/fixtures/tinystories_sample.txt") as f:
+#     all_ids=[]
+#     for _id in t.encode_iterable(f):
+#         all_ids.append(_id)
+
+# origin_text="I come from china，你呢"
+# origin_text="Héllò hôw <|endoftext|><|endoftext|> are ü? 🙃<|endoftext|>"
+# origin_text="Hello, how <|endoftext|><|endoftext|> are you?<|endoftext|>"
+# origin_text=address_raw_str
+# encode_ids=t.encode(origin_text)
+# decode_str=t.decode(encode_ids)
+
+# print(origin_text)
+# print(encode_ids)
+# print(decode_str)
 
 
 # print(t.split_by_special_tokens("ab cPAT1 defPAT2PAT3xyzPAT1PAT1 end    ",["PAT1", "PAT2", "PAT3"]))
+
+
+
+# from collections import Counter
+# from typing import Iterable, Tuple
+# import json
+# import regex as re
+
+# def pretokenizer(raw_str:str,
+#                  special_tokens:list[str],
+#                  pat:str=r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""):
+#     # 构建vocab
+#     vocab={i:chr(i) for i in range(256)}
+#     vocab.update({item[0]:item[1].encode('utf-8') for item in zip(range(256,256+len(special_tokens)),special_tokens)})
+#     # 替换掉special_tokens，并进行分词
+#     if special_tokens:
+#         chunks=re.split("|".join(map(re.escape,special_tokens)),raw_str)
+#     else:
+#         chunks=[raw_str]
+#     word_arr:list[str]=[item for chunk in chunks for item in re.findall(pat, chunk)]
+#     # 统计分词后词频
+#     word_bytes_freq = Counter([
+#         tuple(bytes([b]) for b in x.encode('utf-8'))
+#         for x in word_arr
+#     ])
+#     # 统计初始状态邻接词频
+#     pair_freq=Counter()
+#     for word_bytes in word_bytes_freq.keys():
+#         pair_freq.update(zip(word_bytes,word_bytes[1:]))
+#     return vocab,word_bytes_freq,pair_freq
+
+# def flatten_to_bytes(items:Iterable):
+#     res=[]
+#     for item in items:
+#         if isinstance(item,Iterable):
+#             res.extend(item)
+#         else:
+#             res.append(item)
+#     return bytes(res)
+
+# def update_pair_freq(word_bytes_freq:Counter,pair_freq:Counter,max_freq_pair:tuple):
+#     """
+#     作用：上一轮merge操作造成了对词频的影响，需要更新pair_freq
+#     时机：max_freq_pair对于word_bytes_freq的合并已经在更新pair_freq之前
+#     Args:
+#         max_freq_pair: (b'o',b'w')
+#         word_bytes_freq (Counter): [(b'l', b'ow'), (b' ', b'l', b'ow'),... ]
+#         pair_freq (Counter): [[(b' ', b'l'),(b'l', b'o'),(b'o', b'w')],....]--->[[(b' ', b'l'),(b'l', b'ow')],....]
+#     """
+#     max_freq_pair_bytes=flatten_to_bytes(max_freq_pair)
+#     # 首先保证当前word包含了max_freq_pair，这样才有可能需要做更行
+#     for word_bytes in filter(lambda x:max_freq_pair_bytes in x,word_bytes_freq.keys()):
+#         ## 检查前后序列是否
+#         for i in range(len(word_bytes)):
+#             if (i==(len(word_bytes)-1)) or (word_bytes[i]!=max_freq_pair_bytes and word_bytes[i+1]!=max_freq_pair_bytes):
+#                 continue
+#             elif (word_bytes[i]!=max_freq_pair_bytes and word_bytes[i+1]==max_freq_pair_bytes):
+#                 old_pair=(word_bytes[i],max_freq_pair[0],)
+#                 new_pair=(word_bytes[i],max_freq_pair_bytes,)
+#             elif (word_bytes[i]==max_freq_pair_bytes and word_bytes[i+1]!=max_freq_pair_bytes):
+#                 old_pair=(max_freq_pair[1],word_bytes[i+1],)
+#                 new_pair=(max_freq_pair_bytes,word_bytes[i+1],)
+#             else:
+#                 old_pair=(max_freq_pair[1],max_freq_pair[0],)
+#                 new_pair=(max_freq_pair_bytes,max_freq_pair_bytes,)
+#             ## 更新旧的old_pair频次
+#             pair_freq[old_pair]=pair_freq[old_pair]-word_bytes_freq[word_bytes]
+#             ## 更新新的new_pair频次
+#             pair_freq[new_pair]=pair_freq[new_pair]+word_bytes_freq[word_bytes]
+#     return pair_freq
+
+# def merge_max_pair(word_bytes_freq:Counter,max_freq_pair:tuple,pair_freq:Counter):
+#     """根据max_freq_pair，更新原有的word_bytes分割、合并方式
+#     Args:
+#         max_freq_pair (tuple): (b'o',b'w')
+#         word_bytes_freq (Counter): [(b'l', b'o', b'w'), (b' ', b'l', b'o', b'w'),... ]-> [(b'l', b'ow'), (b' ', b'l', b'ow'),... ]
+#     """
+#     new_word_bytes_freq=word_bytes_freq.copy()
+#     max_freq_pair_bytes=flatten_to_bytes(max_freq_pair)
+#     for word_bytes in word_bytes_freq.keys():
+#         new_word_bytes=[]
+#         i=0
+#         bytes_len=len(word_bytes)
+#         while i < bytes_len:
+#             if i == len(word_bytes)-1:
+#                 # 只剩余1位的情况处理
+#                 new_word_bytes.append(word_bytes[i])
+#                 i+=1
+#                 continue
+#             if word_bytes[i]==max_freq_pair[0] and word_bytes[i+1]==max_freq_pair[1]:
+#                 new_word_bytes.append(max_freq_pair_bytes)
+#                 pair_freq[max_freq_pair]=pair_freq[max_freq_pair]-word_bytes_freq[word_bytes]
+#                 i+=1
+#             else:
+#                 new_word_bytes.append(word_bytes[i])
+#             i+=1
+#         del new_word_bytes_freq[word_bytes]
+#         new_word_bytes_freq[tuple(new_word_bytes)]=word_bytes_freq[word_bytes]
+#     return new_word_bytes_freq
+                
+# def train_bpe(vocab:dict,word_bytes_freq:Counter,pair_freq:Counter,vocab_max_limit:int):
+#     merge_list=[]
+#     max_freq_pair=None
+#     while(len(vocab)<=vocab_max_limit):
+#         if max_freq_pair:
+#             ## 由max_freq_pair的新合并现状，更新pair_freq
+#             pair_freq=update_pair_freq(word_bytes_freq,pair_freq,max_freq_pair)
+#         ## 找到pair_freq更新后[新的max_freq_pair]
+#         max_freq_pair=max(pair_freq,key=lambda x:[pair_freq[x],x])
+#         if pair_freq[max_freq_pair]==0:
+#             return vocab,merge_list
+#         max_freq_pair_bytes=flatten_to_bytes(max_freq_pair)
+#         print(len(vocab),max_freq_pair_bytes)
+#         vocab[len(vocab)]=max_freq_pair_bytes
+#         merge_list.append(max_freq_pair)
+#         ## 对word_bytes_freq中涉及[新的max_freq_pair]做合并操作
+#         word_bytes_freq=merge_max_pair(word_bytes_freq,max_freq_pair,pair_freq)
+#     return vocab,merge_list
+
+
+# with open('/root/CS336/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt') as f:
+#     raw_str=f.read()
+#     # raw_str="low low low <|endoftext|> owowow aowowb lower lower lowest , ，"
+#     # raw_str="low low"
+#     vocab,word_bytes_freq,pair_freq=pretokenizer(raw_str,['<|endoftext|>'])
+#     vocab,merge_list=train_bpe(vocab,word_bytes_freq,pair_freq,10000)
+#     # 保存vocab和merge_list到文件中
+#     def bytes_to_int_list(b:bytes):
+#         return list(b)
+#     def bytes_to_utf8(b):
+#         if isinstance(b,str):
+#             return b
+#         # 尝试UTF-8解码，失败时以�替换
+#         return b.decode('utf-8',errors='replace')
+#     vocab_serialized={str(k):bytes_to_int_list(v) for k,v in vocab.items()}
+#     vocab_utf8={str(k):bytes_to_utf8(v) for k,v in vocab.items()}
+#     merge_list_serialized=[[bytes_to_int_list(a),bytes_to_int_list(b)] for a,b in merge_list]
+#     with open('/root/CS336/assignment1-basics/data/vocab.json','w') as vf:
+#         json.dump(vocab_serialized,vf,ensure_ascii=False,indent=2)
+#     with open('/root/CS336/assignment1-basics/data/vocab_utf8.json','w') as vuf:
+#         json.dump(vocab_utf8,vuf,ensure_ascii=False,indent=2)
+#     with open('/root/CS336/assignment1-basics/data/merge_list.json','w') as mf:
+#         json.dump(merge_list_serialized,mf,ensure_ascii=False,indent=2)
