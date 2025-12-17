@@ -590,4 +590,9 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    raise NotImplementedError
+    with open(input_path) as f:
+        raw_str=f.read()
+        from notebook.Tokenizer import Tokenizer
+        vocab,word_bytes_freq,pair_freq=Tokenizer.__init_train_variables__(raw_str,special_tokens)
+        vocab,merge_list=Tokenizer.train_bpe(vocab,word_bytes_freq,pair_freq,vocab_size)
+        return vocab,merge_list
