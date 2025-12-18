@@ -194,7 +194,9 @@ class Tokenizer():
         """
         max_freq_pair_bytes=flatten_to_bytes(max_freq_pair)
         # 首先保证当前word包含了max_freq_pair，这样才有可能需要做的可行性
-        for word_bytes in filter(lambda x:max_freq_pair_bytes in x,word_bytes_freq.keys()):
+        for word_bytes in word_bytes_freq.keys():
+            if max_freq_pair_bytes not in word_bytes:
+                continue
             ## 检查前后序列是否
             for i in range(len(word_bytes)):
                 if (i==(len(word_bytes)-1)) or (word_bytes[i]!=max_freq_pair_bytes and word_bytes[i+1]!=max_freq_pair_bytes):
@@ -221,9 +223,10 @@ class Tokenizer():
             max_freq_pair (tuple): (b'o',b'w')
             word_bytes_freq (Counter): [(b'l', b'o', b'w'), (b' ', b'l', b'o', b'w'),... ]-> [(b'l', b'ow'), (b' ', b'l', b'ow'),... ]
         """
-        new_word_bytes_freq=word_bytes_freq.copy()
+        # new_word_bytes_freq=word_bytes_freq.copy()
+        word_bytes_list=list(word_bytes_freq.keys())
         max_freq_pair_bytes=flatten_to_bytes(max_freq_pair)
-        for word_bytes in word_bytes_freq.keys():
+        for word_bytes in word_bytes_list:
             new_word_bytes=[]
             i=0
             bytes_len=len(word_bytes)
@@ -240,9 +243,10 @@ class Tokenizer():
                 else:
                     new_word_bytes.append(word_bytes[i])
                 i+=1
-            del new_word_bytes_freq[word_bytes]
-            new_word_bytes_freq[tuple(new_word_bytes)]=word_bytes_freq[word_bytes]
-        return new_word_bytes_freq
+            temp=word_bytes_freq[word_bytes]
+            del word_bytes_freq[word_bytes]
+            word_bytes_freq[tuple(new_word_bytes)]=temp
+        return word_bytes_freq
 
     @classmethod
     def train_bpe(cls,vocab:dict,word_bytes_freq:Counter,pair_freq:Counter,vocab_max_limit:int):
@@ -253,7 +257,7 @@ class Tokenizer():
                 ## 由max_freq_pair的新合并现状，更新pair_freq
                 pair_freq=cls.update_pair_freq(word_bytes_freq,pair_freq,max_freq_pair)
             ## 找到pair_freq更新后[新的max_freq_pair]
-            max_freq_pair=max(pair_freq,key=lambda x:[pair_freq[x],x])
+            max_freq_pair=max(pair_freq,key=lambda x:(pair_freq[x],x))
             if pair_freq[max_freq_pair]==0:
                 return vocab,merge_list
             max_freq_pair_bytes=flatten_to_bytes(max_freq_pair)
