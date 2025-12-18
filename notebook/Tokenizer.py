@@ -1,8 +1,5 @@
-from collections import defaultdict
-from tokenize import Token
 from typing import Iterable, Iterator
 import json
-import copy
 from collections import Counter
 import regex as re
 
@@ -122,20 +119,42 @@ class Tokenizer():
         return result
     
     @classmethod
+    def pre_tokenizer_for_train(cls, raw_str:str, special_tokens:list[str]):
+        """将一段完整文本拆分为 (特殊token切分)+(常见拆词方法)的两级嵌套list结构:[[str]]
+        """
+        parts=[]
+        if special_tokens:        
+            special_tokens_sorted=sorted(set(special_tokens),key=len,reverse=True)
+            split_pat=r"("+"|".join(map(re.escape,special_tokens_sorted))+r")"
+            parts = re.split(split_pat,raw_str)
+        else:
+            parts = [raw_str]
+        result=[]
+        for part in parts:
+            if part!='' and part not in special_tokens:
+                result.append(re.findall(cls.PAT,part))
+        return result
+    
+    @classmethod
     def __init_train_vocab__(cls,special_tokens:list[str]):
-        # 安全的byte取值范围
-        safe_bytes=list(range(ord('!'),ord('~')+1))+list(range(ord('¡'),ord('¬')+1))+list(range(ord("®"), ord("ÿ")+1))
-        base_bytes=safe_bytes[:]
-        diff=0
-        for idx in range(2**8):
-            if idx not in safe_bytes:
-                base_bytes.append(2**8+diff)
-                diff+=1
-        vocab={}
-        for i in range(len(base_bytes)):
-            vocab[i]=chr(base_bytes[i])
+        # # 安全的byte取值范围
+        # safe_bytes=list(range(ord('!'),ord('~')+1))+list(range(ord('¡'),ord('¬')+1))+list(range(ord("®"), ord("ÿ")+1))
+        # base_bytes=safe_bytes[:]
+        # # 补充上非安全byte的偏移量
+        # diff=0
+        # for idx in range(2**8):
+        #     if idx not in safe_bytes:
+        #         ## CS336不支持test不支持这样
+        #         base_bytes.append(2**8+diff)
+        #         diff+=1
+        # # 构造各位置上映射的unicode编码
+        # vocab={}
+        # for i in range(len(base_bytes)):
+        #     vocab[i]=bytes([base_bytes[i]])
+        vocab={i:bytes([i]) for i in range(2**8)}
+        # 补充上special_tokens
         for st in special_tokens:
-            vocab[len(vocab)]=st
+            vocab[len(vocab)]=st.encode('utf-8')
         return vocab
     
     @classmethod
@@ -158,7 +177,7 @@ class Tokenizer():
         # 构建vocab
         vocab=cls.__init_train_vocab__(special_tokens)
         # 预处理训练数据
-        chunk_word_arr=cls.pre_tokenizer(raw_str,special_tokens)
+        chunk_word_arr=cls.pre_tokenizer_for_train(raw_str,special_tokens)
         # 统计分词后词频
         word_bytes_freq,pair_freq=cls.__init_word_and_pair_freq__(chunk_word_arr)
         return vocab,word_bytes_freq,pair_freq
@@ -229,8 +248,7 @@ class Tokenizer():
     def train_bpe(cls,vocab:dict,word_bytes_freq:Counter,pair_freq:Counter,vocab_max_limit:int):
         merge_list=[]
         max_freq_pair=None
-        # byte_2_chr,chr_2_byte=cls.get_bytes_map()
-        while(len(vocab)<=vocab_max_limit):
+        while(len(vocab)<vocab_max_limit):
             if max_freq_pair:
                 ## 由max_freq_pair的新合并现状，更新pair_freq
                 pair_freq=cls.update_pair_freq(word_bytes_freq,pair_freq,max_freq_pair)
@@ -239,7 +257,6 @@ class Tokenizer():
             if pair_freq[max_freq_pair]==0:
                 return vocab,merge_list
             max_freq_pair_bytes=flatten_to_bytes(max_freq_pair)
-            # max_freq_pair_str=''.join([byte_2_chr[b] for b in max_freq_pair_bytes])
             vocab[len(vocab)]=max_freq_pair_bytes
             # merge_pair_str=(
             #     ''.join([byte_2_chr[b] for b in max_freq_pair[0]]),
@@ -318,6 +335,17 @@ class Tokenizer():
             bytes_buffer+=vocab_bytes
         return bytes_buffer.decode('utf-8',errors="replace")
 
+# reference_vocab_path = "/root/CS336/assignment1-basics/tests/fixtures/train-bpe-reference-vocab.json"
+# byte_2_chr,gpt2_byte_decoder=Tokenizer.get_bytes_map()
+# gpt2_reference_vocab={}
+# reference_vocab={}
+# with open(reference_vocab_path, encoding="utf-8") as f:
+#             gpt2_reference_vocab = json.load(f)
+#             reference_vocab = {
+#                 gpt2_vocab_index: bytes([gpt2_byte_decoder[token] for token in gpt2_vocab_item])
+#                 for gpt2_vocab_item, gpt2_vocab_index in gpt2_reference_vocab.items()
+#             }
+# pass
 
 # vocab_filepath="/root/CS336/assignment1-basics/tests/fixtures/gpt2_vocab.json"
 # merges_filepath="/root/CS336/assignment1-basics/tests/fixtures/gpt2_merges.txt"
