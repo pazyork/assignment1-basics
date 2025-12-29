@@ -12,21 +12,27 @@ class RotaryPositionalEmbedding(nn.Module):
         # max_seq_len,d_k,d_k
         rotary_matrix=torch.zeros(max_seq_len,d_k,d_k,dtype=torch.float32,device=device)
         max_dim_idx=int(d_k/2)
-        for i in range(max_seq_len):
-            for k in range(max_dim_idx):
-                theta_ik=torch.tensor(i*self.theta**((-2*k)/d_k))
-                cos_theta=torch.cos(theta_ik)
-                sin_theta=torch.sin(theta_ik)
-                rotary_matrix[i,2*k,2*k]=cos_theta
-                rotary_matrix[i,2*k,2*k+1]=-sin_theta
-                rotary_matrix[i,2*k+1,2*k]=sin_theta
-                rotary_matrix[i,2*k+1,2*k+1]=cos_theta
-            if d_k%2==1:
-                k=max_dim_idx
-                theta_ik=torch.tensor(i*self.theta**((-2*k)/d_k))
-                cos_theta=torch.cos(theta_ik)
-                rotary_matrix[i,d_k-1,d_k-1]=cos_theta
-                
+        half_dim=d_k//2
+        
+        # max_seq_len,1
+        positions=torch.arange(max_seq_len,device=device).unsqueeze(-1)
+        # half_dim
+        dims=torch.arange(half_dim,device=device)
+        # max_seq_len,half_dim
+        theta_iks=positions*(self.theta**(-2*dims/d_k))
+        # max_seq_len,half_dim
+        cos_thetas=torch.cos(theta_iks)
+        sin_thetas=torch.sin(theta_iks)
+        
+        for k in range(half_dim):
+            rotary_matrix[:,2*k,2*k]=cos_thetas[:,k]
+            rotary_matrix[:,2*k+1,2*k+1]=cos_thetas[:,k]
+            rotary_matrix[:,2*k,2*k+1]=-sin_thetas[:,k]
+            rotary_matrix[:,2*k+1,2*k]=sin_thetas[:,k]
+        
+        if d_k%2==1:
+            rotary_matrix[:,d_k-1,d_k-1]=1.0
+        # 注册后，即可self.rotary_matrix这也适用
         self.register_buffer('rotary_matrix',rotary_matrix,False)
         
         
