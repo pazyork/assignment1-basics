@@ -94,9 +94,6 @@ def run_swiglu(
     
     swiglu=SwiGLU(d_model=d_model,d_ff=d_ff)
     swiglu.load_state_dict({'w1_weight':w1_weight,'w2_weight':w2_weight,'w3_weight':w3_weight})
-    
-    
-    
     out_features=swiglu.forward(in_features)
     return out_features
     
@@ -120,7 +117,9 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    from notebook.utiltool import UtilTool
+    
+    return UtilTool.scaled_dot_product_attention(Q,K,V,mask)
 
 
 def run_multihead_self_attention(
@@ -132,6 +131,27 @@ def run_multihead_self_attention(
     o_proj_weight: Float[Tensor, " d_model d_v"],
     in_features: Float[Tensor, " ... sequence_length d_in"],
 ) -> Float[Tensor, " ... sequence_length d_out"]:
+    """
+    给定一个朴素（未经优化的）非批量版本多头注意力机制中的键（key）、查询（query）和值（value）投影权重，
+    返回一个优化后的批量实现版本的输出结果。这个实现应该在一个矩阵乘法操作中同时处理所有注意力头的
+    键、查询和值投影变换。
+    这个函数不应该使用RoPE（旋转位置编码）。
+    请参考Vaswani等人2017年论文的第3.2.2节。
+
+    参数：
+        d_model (int): 前馈网络输入和输出的维度大小。
+        num_heads (int): 多头注意力机制中使用的注意力头数量。
+        max_seq_len (int): 最大序列长度，如果你的实现需要预先缓存数据的话。
+        q_proj_weight (Float[Tensor, "d_k d_in"]): 查询（Q）投影的权重矩阵
+        k_proj_weight (Float[Tensor, "d_k d_in"]): 键（K）投影的权重矩阵
+        v_proj_weight (Float[Tensor, "d_k d_in"]): 值（V）投影的权重矩阵
+        o_proj_weight (Float[Tensor, "d_model d_v"]): 输出投影的权重矩阵
+        in_features (Float[Tensor, "... sequence_length d_in"]): 要运行实现的输入特征张量。
+
+    返回值：
+        Float[Tensor, " ... sequence_length d_out"]: 包含优化后的批量多头注意力实现结果的输出张量，
+        该实现使用了给定的QKV投影权重和输入特征。
+    """
     """
     Given the key, query, and value projection weights of a naive unbatched
     implementation of multi-head attention, return the output of an optimized batched
@@ -154,7 +174,26 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    # print('d_model',d_model)
+    # print('num_heads',num_heads)
+    # print('q_proj_weight.shape',q_proj_weight.shape)
+    # print('k_proj_weight.shape',k_proj_weight.shape)
+    # print('v_proj_weight.shape',v_proj_weight.shape)
+    # print('o_proj_weight.shape',o_proj_weight.shape)
+    # print('in_features.shape',in_features.shape)
+    
+    from notebook.multi_head_attention import MultiHeadAttention
+    seq_len=in_features.shape[-2]
+    mha=MultiHeadAttention(d_model,num_heads,seq_len)
+    mha.load_state_dict({
+        'q_proj_weight':q_proj_weight,
+        'k_proj_weight':k_proj_weight,
+        'v_proj_weight':v_proj_weight,
+        'o_proj_weight':o_proj_weight
+    })
+    result = mha.forward(in_features)
+    return result
+    
 
 
 def run_multihead_self_attention_with_rope(
@@ -194,7 +233,17 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    from notebook.multi_head_attention import MultiHeadAttention
+    mha=MultiHeadAttention(d_model,num_heads,max_seq_len,theta)
+    mha.load_state_dict({
+        'q_proj_weight':q_proj_weight,
+        'k_proj_weight':k_proj_weight,
+        'v_proj_weight':v_proj_weight,
+        'o_proj_weight':o_proj_weight
+    })
+    result = mha.forward(in_features,True)
+    return result
+    
 
 
 def run_rope(

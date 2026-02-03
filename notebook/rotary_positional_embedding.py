@@ -11,7 +11,6 @@ class RotaryPositionalEmbedding(nn.Module):
         # self.register_buffer(persistent=False)
         # max_seq_len,d_k,d_k
         rotary_matrix=torch.zeros(max_seq_len,d_k,d_k,dtype=torch.float32,device=device)
-        max_dim_idx=int(d_k/2)
         half_dim=d_k//2
         
         # max_seq_len,1
@@ -41,8 +40,8 @@ class RotaryPositionalEmbedding(nn.Module):
         ## token_positions  (...,seq_len)
         ## rotary_matrix (max_seq_len,d_k,d_k)
         ## vector_rotary_matrix (...,seq_len,d_k,d_k)
-        print('x.shape,token_positions.shape:',x.shape,token_positions.shape)
+        # print('x.shape,token_positions.shape:',x.shape,token_positions.shape)
         self.vector_rotary_matrix=self.rotary_matrix[token_positions]
         result=torch.einsum('...qij,...qj->...qi',self.vector_rotary_matrix,x)
-        print('result.shape',result.shape)
+        # print('result.shape',result.shape)
         return result
