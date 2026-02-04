@@ -66,10 +66,10 @@ class MultiHeadAttention(torch.nn.Module):
 
         from .utiltool import UtilTool
         scale_softmax = UtilTool.softmax(scale,-1)
-        o=torch.einsum('...hij,...hjv->...hiv',scale_softmax,v)
+        o = torch.einsum('...hij,...hjv->...hiv',scale_softmax,v)
         print("o.shape=",o.shape)
-        o=rearrange(o,'... h s v->... s (h v)')
+        o = rearrange(o,'... h s v->... s (h v)')
         print("o.shape=",o.shape)
         print("self.o_proj_weight=",self.o_proj_weight.shape)
-        o=torch.einsum('ov,... sv->...so',self.o_proj_weight,o)
+        o = torch.einsum('ov,... sv->...so',self.o_proj_weight,o)
         return o
